@@ -9,7 +9,12 @@ export interface CallSiteRecord {
 	column: number;
 }
 
-const CALL_SITE_RE = /\b(?:([A-Za-z_]\w*)\s*\.\s*)?([A-Za-z_]\w*)\s*([({])/g;
+const CALL_SITE_RE = /\b(?:([A-Za-z_]\w*)\s*[?*]?\.\s*)?([A-Za-z_]\w*)\s*([({])/g;
+
+const RESERVED_WORDS = new Set([
+	'if', 'else', 'for', 'while', 'switch', 'catch', 'synchronized', 'return',
+	'throw', 'assert', 'new', 'in', 'instanceof', 'super', 'this'
+]);
 
 export function extractCallSites(text: string, sourcePath: string): CallSiteRecord[] {
 	const records: CallSiteRecord[] = [];
@@ -27,7 +32,13 @@ export function extractCallSites(text: string, sourcePath: string): CallSiteReco
 			if (delimiter === '{' && !receiverName) {
 				continue;
 			}
+			if (RESERVED_WORDS.has(methodName)) {
+				continue;
+			}
 			const methodStart = line.lastIndexOf(methodName, match.index + match[0].length - 1);
+			if (!receiverName && line.charAt(methodStart - 1) === '@') {
+				continue;
+			}
 			if (isInsideStringLiteral(line, methodStart)) {
 				continue;
 			}

@@ -4,6 +4,7 @@ import { detectGrailsModules, collectGrailsModuleSourceFiles } from './grails_mo
 import { CallSiteIndexStore } from './call_site_index_store';
 import { CallSiteRecord } from './call_site_extractor';
 import { escapeRegExp, isInsideStringLiteral, isImportLine, isInsideLineComment } from './text_scan_logic';
+import { findDeclarationTarget, findReferenceTarget, resolveUsages } from './usage_lookup_logic';
 
 const SOURCE_EXCLUDE = '**/{node_modules,.git,build,target,out}/**';
 const CONCURRENCY = 64;
@@ -22,10 +23,6 @@ export async function collectSourceFilePaths(): Promise<string[]> {
 	const maxFiles = vscode.workspace.getConfiguration('codeGroovy').get<number>('index.maxSourceFiles', 0);
 	const files = await vscode.workspace.findFiles('**/*.{groovy,java}', SOURCE_EXCLUDE, maxFiles > 0 ? maxFiles : undefined);
 	return files.map(file => file.fsPath);
-}
-
-export function grailsFieldNameForClass(className: string): string {
-	return className.charAt(0).toLowerCase() + className.slice(1);
 }
 
 export async function findWordOccurrences(
@@ -114,18 +111,43 @@ export class ReferenceProvider implements vscode.ReferenceProvider {
 		}
 
 		const word = document.getText(wordRange);
-		const indexed = this.callSiteIndex.lookup(word);
-		const results = indexed.length > 0
-			? indexed.map(callSiteToLocation)
-			: await findWordOccurrences(word, undefined, token);
+		const documentText = document.getText();
+		const line = wordRange.start.line;
+		const target = findReferenceTarget(documentText, document.uri.fsPath, line, wordRange.start.character, word);
 
-		if (!context.includeDeclaration) {
-			const declUri = document.uri.toString();
-			const declLine = wordRange.start.line;
-			return results.filter(location => !(location.uri.toString() === declUri && location.range.start.line === declLine));
+		let results: vscode.Location[];
+		if (target) {
+			const resolution = resolveUsages(target, this.callSiteIndex, 'references');
+			results = resolution.records.map(callSiteToLocation);
+			if (target.kind === 'class') {
+				if (resolution.textScans.length > 0) {
+					results = mergeByLine(await findWordOccurrences(word, undefined, token), results);
+				}
+			} else {
+				for (const scan of resolution.textScans) {
+					if (results.length > 0) {
+						break;
+					}
+					results = await findWordOccurrences(word, scan.receiverFieldName, token);
+				}
+			}
+		} else {
+			results = await findWordOccurrences(word, undefined, token);
 		}
 
-		return results;
+		if (!findDeclarationTarget(documentText, document.uri.fsPath, line, word)) {
+			return results;
+		}
+		const declUri = document.uri.toString();
+		const usages = results.filter(location => !(location.uri.toString() === declUri && location.range.start.line === line));
+		return context.includeDeclaration
+			? [new vscode.Location(document.uri, wordRange), ...usages]
+			: usages;
 	}
 }
 
+function mergeByLine(primary: vscode.Location[], secondary: vscode.Location[]): vscode.Location[] {
+	const lineKey = (location: vscode.Location) => `${location.uri.toString()}::${location.range.start.line}`;
+	const covered = new Set(primary.map(lineKey));
+	return [...primary, ...secondary.filter(location => !covered.has(lineKey(location)))];
+}

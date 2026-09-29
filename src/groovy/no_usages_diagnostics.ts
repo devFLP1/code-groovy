@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { parseDocumentSymbols } from './symbol_parser';
 import { findMethodsWithNoUsages, findClassesWithNoIndexedCallSite, UnusedSymbolHint } from './no_usages_logic';
 import { CallSiteIndexStore } from './call_site_index_store';
-import { findWordOccurrences, grailsFieldNameForClass } from './reference_provider';
+import { findWordOccurrences } from './reference_provider';
+import { grailsFieldNameForClass } from './usage_lookup_logic';
 
 const DIAGNOSTIC_SOURCE = 'code-groovy';
 
