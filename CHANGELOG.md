@@ -14,6 +14,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Add Go to Definition (Ctrl+Click / Cmd+Click) for field and property access (`receiver.field`, including `this.field`), resolving the receiver's declared type from the enclosing document before falling back to the Grails naming convention
 - Flag a method or class with no detected usages in the workspace with a native "unused" hint (grayed out, hover message, and an entry in the Problems panel) — same mechanism VS Code uses for unused imports
 
+## [0.2.3] - 2026-09-28
+- Internal: add CI, contribution guidelines and automated release workflow (no functional changes)
+
+## [0.2.2] - 2026-09-26
+- Add `codeGroovy.importOrder.warnings` to disable import-order **Problems** warnings without hiding other diagnostics ([#54](https://github.com/code-groovy/code-groovy/issues/54))
+
 ## [0.2.1] - 2026-09-04
 - Do not treat `identifier / number` as a Groovy slashy string (division stays division; `= /regex/` still highlights)
 - Ctrl+click another TagLib from Groovy (`catalogTagLib.method` / `namespace.method`) and `g.render(template: "...")` the same way as in GSP
