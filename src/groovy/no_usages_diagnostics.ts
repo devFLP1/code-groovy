@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { parseDocumentSymbols } from './symbol_parser';
 import { findMethodsWithNoUsages, findClassesWithNoIndexedCallSite, UnusedSymbolHint } from './no_usages_logic';
 import { CallSiteIndexStore } from './call_site_index_store';
-import { findWordOccurrences } from './reference_provider';
+import { findWordOccurrences, grailsFieldNameForClass } from './reference_provider';
 
 const DIAGNOSTIC_SOURCE = 'code-groovy';
 
@@ -71,7 +71,7 @@ export class NoUsagesDiagnostics implements vscode.Disposable {
 
 		const classCandidates = findClassesWithNoIndexedCallSite(
 			parsed.classes,
-			className => this.callSiteIndex.lookup(className).length > 0 || this.callSiteIndex.lookupByReceiver(className).length > 0
+			className => this.hasAnyIndexedCallSite(className)
 		);
 		const classHints = await this.confirmClassesHaveNoTextualUsage(classCandidates, document);
 
@@ -81,6 +81,16 @@ export class NoUsagesDiagnostics implements vscode.Disposable {
 
 		const diagnostics = [...methodHints, ...classHints].map(hint => toDiagnostic(hint));
 		this.collection.set(document.uri, diagnostics);
+	}
+
+	private hasAnyIndexedCallSite(className: string): boolean {
+		if (this.callSiteIndex.lookup(className).length > 0 || this.callSiteIndex.lookupByReceiver(className).length > 0) {
+			return true;
+		}
+		if (className.endsWith('Service')) {
+			return this.callSiteIndex.lookupByReceiver(grailsFieldNameForClass(className)).length > 0;
+		}
+		return false;
 	}
 
 	private async confirmClassesHaveNoTextualUsage(
