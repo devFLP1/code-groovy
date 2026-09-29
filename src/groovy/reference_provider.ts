@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import { detectGrailsModules, collectGrailsModuleSourceFiles } from './grails_module_detector';
 import { CallSiteIndexStore } from './call_site_index_store';
 import { CallSiteRecord } from './call_site_extractor';
-import { escapeRegExp, isInsideStringLiteral, isImportLine, isInsideLineComment } from './text_scan_logic';
-import { findDeclarationTarget, findReferenceTarget, resolveUsages } from './usage_lookup_logic';
+import { findWordMatches } from './text_scan_logic';
+import { findDeclarationTarget, findReferenceTarget, resolveUsages, UsageHierarchy } from './usage_lookup_logic';
 
 const SOURCE_EXCLUDE = '**/{node_modules,.git,build,target,out}/**';
 const CONCURRENCY = 64;
@@ -28,16 +28,14 @@ export async function collectSourceFilePaths(): Promise<string[]> {
 export async function findWordOccurrences(
 	word: string,
 	receiverFieldName?: string,
-	token?: vscode.CancellationToken
+	token?: vscode.CancellationToken,
+	files?: string[]
 ): Promise<vscode.Location[]> {
 	if (!word || word.length < 2) {
 		return [];
 	}
 
-	const filePaths = await collectSourceFilePaths();
-	const pattern = receiverFieldName
-		? '\\b' + escapeRegExp(receiverFieldName) + '\\s*\\.\\s*(' + escapeRegExp(word) + ')\\b'
-		: '\\b(' + escapeRegExp(word) + ')\\b';
+	const filePaths = files ?? await collectSourceFilePaths();
 	const results: vscode.Location[] = [];
 
 	let index = 0;
@@ -53,32 +51,9 @@ export async function findWordOccurrences(
 			} catch {
 				continue;
 			}
-			if (!text.includes(word)) {
-				continue;
-			}
-			const lines = text.split(/\r\n|\r|\n/);
-			const lineRegex = new RegExp(pattern, 'gd');
-			for (let lineNo = 0; lineNo < lines.length; lineNo++) {
-				const line = lines[lineNo];
-				if (!line.includes(word)) {
-					continue;
-				}
-				if (isImportLine(line)) {
-					continue;
-				}
-				lineRegex.lastIndex = 0;
-				let match: RegExpExecArray | null;
-				while ((match = lineRegex.exec(line)) !== null) {
-					const groupIndices = (match as RegExpExecArray & { indices: Array<[number, number]> }).indices[1];
-					const methodStart = groupIndices[0];
-					if (isInsideStringLiteral(line, methodStart) || isInsideLineComment(line, methodStart)) {
-						continue;
-					}
-					results.push(new vscode.Location(
-						vscode.Uri.file(current),
-						new vscode.Range(lineNo, methodStart, lineNo, methodStart + word.length)
-					));
-				}
+			const uri = vscode.Uri.file(current);
+			for (const match of findWordMatches(text, word, receiverFieldName)) {
+				results.push(wordLocation(uri, match.line, match.column, word));
 			}
 		}
 	};
@@ -90,14 +65,18 @@ export async function findWordOccurrences(
 }
 
 export function callSiteToLocation(record: CallSiteRecord): vscode.Location {
-	return new vscode.Location(
-		vscode.Uri.file(record.sourcePath),
-		new vscode.Position(record.line, record.column)
-	);
+	return wordLocation(vscode.Uri.file(record.sourcePath), record.line, record.column, record.methodName);
+}
+
+function wordLocation(uri: vscode.Uri, line: number, column: number, word: string): vscode.Location {
+	return new vscode.Location(uri, new vscode.Range(line, column, line, column + word.length));
 }
 
 export class ReferenceProvider implements vscode.ReferenceProvider {
-	constructor(private readonly callSiteIndex: CallSiteIndexStore) {}
+	constructor(
+		private readonly callSiteIndex: CallSiteIndexStore,
+		private readonly hierarchy: UsageHierarchy
+	) {}
 
 	async provideReferences(
 		document: vscode.TextDocument,
@@ -117,22 +96,22 @@ export class ReferenceProvider implements vscode.ReferenceProvider {
 
 		let results: vscode.Location[];
 		if (target) {
-			const resolution = resolveUsages(target, this.callSiteIndex, 'references');
+			const resolution = resolveUsages(target, this.callSiteIndex, 'references', this.hierarchy);
 			results = resolution.records.map(callSiteToLocation);
-			if (target.kind === 'class') {
-				if (resolution.textScans.length > 0) {
-					results = mergeByLine(await findWordOccurrences(word, undefined, token), results);
+			for (const scan of resolution.textScans) {
+				if (target.kind === 'method' && results.length > 0) {
+					break;
 				}
-			} else {
-				for (const scan of resolution.textScans) {
-					if (results.length > 0) {
-						break;
-					}
-					results = await findWordOccurrences(word, scan.receiverFieldName, token);
-				}
+				const scanned = await findWordOccurrences(word, scan.receiverFieldName, token, scan.files);
+				results = target.kind === 'class' ? mergeByLine(scanned, results) : scanned;
+			}
+			if (results.length === 0) {
+				results = resolution.superDeclarations.map(declaration =>
+					wordLocation(vscode.Uri.file(declaration.sourcePath), declaration.line, declaration.column, word));
 			}
 		} else {
-			results = await findWordOccurrences(word, undefined, token);
+			results = findWordMatches(documentText, word)
+				.map(match => new vscode.Location(document.uri, new vscode.Range(match.line, match.column, match.line, match.column + word.length)));
 		}
 
 		if (!findDeclarationTarget(documentText, document.uri.fsPath, line, word)) {

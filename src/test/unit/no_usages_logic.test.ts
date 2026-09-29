@@ -14,6 +14,8 @@ function classSymbol(simpleName: string, line = 0, column = 0): ParsedClassSymbo
 		kind: 'class',
 		line,
 		column,
+		endLine: line,
+		bodyDepth: 1,
 		extendsTypes: [],
 		implementsTypes: [],
 		sourcePath: '/tmp/Widget.groovy'

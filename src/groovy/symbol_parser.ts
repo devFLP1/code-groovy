@@ -1,4 +1,5 @@
 import { parsePackageName } from './class_parser';
+import { braceDepthAtLineStarts, closingBraceLine, maskNonCode } from './text_scan_logic';
 
 export interface ParsedMethod {
 	name: string;
@@ -14,6 +15,7 @@ export interface ParsedField {
 	line: number;
 	column: number;
 	classFqn: string;
+	classMember: boolean;
 }
 
 export interface ParsedClassSymbol {
@@ -23,6 +25,8 @@ export interface ParsedClassSymbol {
 	kind: 'class' | 'interface' | 'trait' | 'enum';
 	line: number;
 	column: number;
+	endLine: number;
+	bodyDepth: number;
 	extendsTypes: string[];
 	implementsTypes: string[];
 	sourcePath?: string;
@@ -37,8 +41,11 @@ export interface ParsedDocumentSymbols {
 
 const CLASS_LINE_RE =
 	/^\s*(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\s+)*(class|interface|trait|enum)\s+([A-Za-z_]\w*)(?:\s+extends\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*))?(?:\s+implements\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*))?\b/;
-const METHOD_LINE_RE =
-	/^\s*(?:@[\w.]+(?:\([^)]*\))?\s+)*(?:(?:public|protected|private|static|final|abstract|synchronized)\s+)*(?:def|(?:void|boolean|byte|char|short|int|long|float|double|[A-Z][\w.]*(?:<[^()]*>)?)(?:\[\])*)\s+([A-Za-z_]\w*)\s*\(/;
+const MODIFIER = '(?:public|protected|private|static|final|abstract|synchronized)';
+const RETURN_TYPE = '(?:def|(?:void|boolean|byte|char|short|int|long|float|double|[A-Z][\\w.]*(?:<[^()]*>)?)(?:\\[\\])*)';
+const METHOD_LINE_RE = new RegExp(
+	`^\\s*(?:@[\\w.]+(?:\\([^)]*\\))?\\s+)*(?:(?:${MODIFIER}\\s+)*${RETURN_TYPE}|(?:${MODIFIER}\\s+)*(?:public|protected|private|static|final|abstract))\\s+([A-Za-z_]\\w*)\\s*\\(`
+);
 const FIELD_LINE_RE =
 	/^\s*(?:(?:public|protected|private|static|final)\s+)*([A-Z][A-Za-z0-9_]*)\s+([a-zA-Z_]\w*)\s*(?:=|;|$)/;
 const SERVICE_INJECT_RE = /^\s*def\s+([a-z][A-Za-z0-9_]*Service)\s*(?:=|;|$)/;
@@ -52,16 +59,26 @@ function splitTypeList(raw: string | undefined): string[] {
 	return raw.split(',').map(part => part.trim()).filter(Boolean);
 }
 
-export function parseDocumentSymbols(text: string, sourcePath?: string): ParsedDocumentSymbols {
+export function parseDocumentSymbols(text: string, sourcePath?: string, maskedText = maskNonCode(text)): ParsedDocumentSymbols {
 	const packageName = parsePackageName(text);
 	const lines = text.split('\n');
 	const classes: ParsedClassSymbol[] = [];
 	const methods: ParsedMethod[] = [];
 	const fields: ParsedField[] = [];
-	let currentClassFqn = packageName ? `${packageName}.${inferScriptClassName(sourcePath)}` : inferScriptClassName(sourcePath);
+	const depths = braceDepthAtLineStarts(maskedText);
+	const scriptClassFqn = packageName ? `${packageName}.${inferScriptClassName(sourcePath)}` : inferScriptClassName(sourcePath);
+	const openClasses: ParsedClassSymbol[] = [];
+	let currentClassFqn = scriptClassFqn;
+	let lineOffset = 0;
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
+		const lineStart = lineOffset;
+		lineOffset += line.length + 1;
+		while (openClasses.length > 0 && openClasses[openClasses.length - 1].endLine < i) {
+			openClasses.pop();
+			currentClassFqn = openClasses[openClasses.length - 1]?.fqn ?? scriptClassFqn;
+		}
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith('//')) {
 			continue;
@@ -73,17 +90,21 @@ export function parseDocumentSymbols(text: string, sourcePath?: string): ParsedD
 			const simpleName = classMatch[2];
 			const fqn = packageName ? `${packageName}.${simpleName}` : simpleName;
 			const column = line.indexOf(simpleName);
-			classes.push({
+			const symbol: ParsedClassSymbol = {
 				simpleName,
 				fqn,
 				packageName,
 				kind,
 				line: i,
 				column: column >= 0 ? column : 0,
+				endLine: closingBraceLine(maskedText, lineStart + Math.max(column, 0), i) ?? lines.length - 1,
+				bodyDepth: (depths[i] ?? 0) + 1,
 				extendsTypes: splitTypeList(classMatch[3]),
 				implementsTypes: splitTypeList(classMatch[4]),
 				sourcePath
-			});
+			};
+			classes.push(symbol);
+			openClasses.push(symbol);
 			currentClassFqn = fqn;
 			continue;
 		}
@@ -114,7 +135,8 @@ export function parseDocumentSymbols(text: string, sourcePath?: string): ParsedD
 				typeName,
 				line: i,
 				column: column >= 0 ? column : 0,
-				classFqn: currentClassFqn
+				classFqn: currentClassFqn,
+				classMember: depths[i] === 1
 			});
 			continue;
 		}
@@ -129,7 +151,8 @@ export function parseDocumentSymbols(text: string, sourcePath?: string): ParsedD
 				name,
 				line: i,
 				column: column >= 0 ? column : 0,
-				classFqn: currentClassFqn
+				classFqn: currentClassFqn,
+				classMember: depths[i] === 1
 			});
 		}
 	}
@@ -144,6 +167,8 @@ export function parseDocumentSymbols(text: string, sourcePath?: string): ParsedD
 			kind: 'class',
 			line: 0,
 			column: 0,
+			endLine: lines.length - 1,
+			bodyDepth: 0,
 			extendsTypes: [],
 			implementsTypes: [],
 			sourcePath
@@ -180,7 +205,7 @@ export function findFieldInClassHierarchy(
 			continue;
 		}
 		const parsed = parseDocumentSymbols(content, entry.filePath);
-		const field = parsed.fields.find(candidate => candidate.name === fieldName);
+		const field = parsed.fields.find(candidate => candidate.classMember && candidate.name === fieldName);
 		if (field) {
 			return [{ filePath: entry.filePath, line: field.line, column: field.column }];
 		}
