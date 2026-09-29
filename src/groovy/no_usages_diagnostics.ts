@@ -34,7 +34,6 @@ export class NoUsagesDiagnostics implements vscode.Disposable {
 		this.refreshAllOpenDocuments();
 	}
 
-	/** Re-checks every open document; call after the workspace-wide call-site index finishes rebuilding. */
 	refreshAllOpenDocuments(): void {
 		for (const document of vscode.workspace.textDocuments) {
 			if (document.languageId === 'groovy' && !document.isClosed) {
