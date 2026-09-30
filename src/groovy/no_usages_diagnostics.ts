@@ -3,7 +3,7 @@ import { parseDocumentSymbols } from './symbol_parser';
 import { findMethodsWithNoUsages, findClassesWithNoIndexedCallSite, UnusedSymbolHint } from './no_usages_logic';
 import { CallSiteIndexStore } from './call_site_index_store';
 import { findWordOccurrences } from './usage_locations';
-import { grailsFieldNameForClass } from './usage_lookup_logic';
+import { grailsFieldNameForClass } from './service_bean';
 
 const DIAGNOSTIC_SOURCE = 'code-groovy';
 
