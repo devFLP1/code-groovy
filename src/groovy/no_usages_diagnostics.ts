@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { parseDocumentSymbols } from './symbol_parser';
 import { findMethodsWithNoUsages, findClassesWithNoIndexedCallSite, UnusedSymbolHint } from './no_usages_logic';
 import { CallSiteIndexStore } from './call_site_index_store';
-import { findWordOccurrences } from './reference_provider';
+import { findWordOccurrences } from './usage_locations';
 import { grailsFieldNameForClass } from './usage_lookup_logic';
 
 const DIAGNOSTIC_SOURCE = 'code-groovy';
@@ -97,11 +97,11 @@ export class NoUsagesDiagnostics implements vscode.Disposable {
 		candidates: UnusedSymbolHint[],
 		document: vscode.TextDocument
 	): Promise<UnusedSymbolHint[]> {
-		const declUri = document.uri.toString();
+		const declPath = document.uri.fsPath;
 		const confirmed: UnusedSymbolHint[] = [];
 		for (const candidate of candidates) {
 			const matches = await findWordOccurrences(candidate.name);
-			const realUsage = matches.some(location => !(location.uri.toString() === declUri && location.range.start.line === candidate.line));
+			const realUsage = matches.some(location => !(location.sourcePath === declPath && location.line === candidate.line));
 			if (!realUsage) {
 				confirmed.push(candidate);
 			}
